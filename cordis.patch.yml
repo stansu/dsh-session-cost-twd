@@ -1,0 +1,4 @@
+- insert:
+    - id: session-cost-twd
+      name: 'dsh-session-cost-twd'
+      config: {}

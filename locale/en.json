@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session spend & balance (TWD)",
+    "description": "Shows the estimated session spend in New Taiwan dollars plus the DeepSeek wallet balance under the composer, with a per-turn breakdown."
+  }
+}
