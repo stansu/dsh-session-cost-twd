@@ -37,6 +37,8 @@ window.__ModuleLoader__.load({
       'dialog.rateNote': 'Used only for display; DeepSeek bills in US dollars.',
       'dialog.partial': 'Some turns did not report usage and are left out.',
       'dialog.peakNote': 'Peak hours are 01:00–04:00 and 06:00–10:00 UTC, Monday to Friday; Chinese public holidays are not tracked.',
+      'dialog.refresh': 'Refresh',
+      'dialog.live': 'Turn costs are recomputed as tokens arrive; refresh re-reads the saved pricing.',
       'dialog.note': 'Estimate only. Actual deductions come from your DeepSeek balance —',
       'dialog.noteLink': 'see the platform bill',
       'dialog.close': 'Close',
@@ -49,6 +51,7 @@ window.__ModuleLoader__.load({
       'balance.open': 'Platform billing',
       'balance.native': '{amount} · rate {rate}',
       'balance.stale': 'Last read {time}',
+      'balance.auto': 'Refreshes after each turn, every 2 minutes, and whenever this panel opens.',
       'balance.failed': 'Could not read the balance. The sign-in may have expired.',
       'balance.refresh': 'Refresh',
     }
@@ -71,6 +74,8 @@ window.__ModuleLoader__.load({
       'dialog.rateNote': '只用於換算顯示，DeepSeek 實際以美元扣款。',
       'dialog.partial': '有部分輪次沒有回報用量，未計入。',
       'dialog.peakNote': '尖峰時段為 UTC 週一至週五 01:00–04:00、06:00–10:00（即北京時間 09:00–12:00、14:00–18:00），未計入中國法定假日。',
+      'dialog.refresh': '重新整理',
+      'dialog.live': '每輪花費會隨 token 進帳即時重算；重新整理會重讀已存的計價設定。',
       'dialog.note': '僅為估算，實際扣款以 DeepSeek 餘額為準 —',
       'dialog.noteLink': '查看平台帳務',
       'dialog.close': '關閉',
@@ -83,6 +88,7 @@ window.__ModuleLoader__.load({
       'balance.open': '平台帳務',
       'balance.native': '{amount} · 匯率 {rate}',
       'balance.stale': '上次讀取 {time}',
+      'balance.auto': '每輪結束、每 2 分鐘、以及打開這個面板時都會重讀。',
       'balance.failed': '讀取不到餘額，可能是登入過期或連線問題。',
       'balance.refresh': '重新整理',
     }
@@ -706,11 +712,12 @@ window.__ModuleLoader__.load({
       const projection = readProjection('tokenUsage')
       const timeline = readChat(snapshot => snapshot.timeline)
       const [config, setConfig] = React.useState(readConfig)
+      const [tick, setTick] = React.useState(0)
       const panel = usePillPanel()
 
       const priced = React.useMemo(
         () => priceTimeline(timeline, config.model),
-        [timeline, config.model],
+        [timeline, config.model, tick],
       )
 
       /* Fall back to the whole-log projection when the timeline is not readable. */
@@ -720,7 +727,7 @@ window.__ModuleLoader__.load({
         if (value.total <= 0) return null
         const result = priceUsage(projection, config.model, Date.now())
         return { amount: result.amount, counts: result.counts, peak: result.peak }
-      }, [priced.rows.length, projection, config.model])
+      }, [priced.rows.length, projection, config.model, tick])
 
       const totalUsd = priced.rows.length > 0
         ? priced.totalUsd
@@ -744,6 +751,12 @@ window.__ModuleLoader__.load({
       }
 
       const rows = priced.rows.slice(-8)
+
+      /** Re-read the saved pricing and recompute the loaded turns. */
+      const refresh = () => {
+        setConfig(readConfig())
+        setTick(current => current + 1)
+      }
 
       if (totalTokens <= 0) return null
 
@@ -770,7 +783,7 @@ window.__ModuleLoader__.load({
           title: t('dialog.title'),
           subtitle: t('dialog.subtitle'),
           onClose: panel.close,
-        }, SpendDetails({ t, config, rows, totalUsd, totalTokens, totalTwd, turnCount: priced.rows.length, missing: priced.missing, update })) : null,
+        }, SpendDetails({ t, config, rows, totalUsd, totalTokens, totalTwd, turnCount: priced.rows.length, missing: priced.missing, update, refresh })) : null,
       )
     }
 
@@ -779,7 +792,7 @@ window.__ModuleLoader__.load({
      * @param props - totals, rows, and the pricing setter.
      * @returns the panel sections.
      */
-    function SpendDetails({ t, config, rows, totalUsd, totalTokens, totalTwd, turnCount, missing, update }) {
+    function SpendDetails({ t, config, rows, totalUsd, totalTokens, totalTwd, turnCount, missing, update, refresh }) {
       const list = rows.map(row => h('li', {
         className: 'dsh-sct-row',
         key: String(row.turn),
@@ -825,6 +838,13 @@ window.__ModuleLoader__.load({
           })),
         h('p', { className: 'dsh-sct-note', key: 'rate' }, t('dialog.rateNote')),
         missing > 0 ? h('p', { className: 'dsh-sct-note', key: 'partial' }, t('dialog.partial')) : null,
+        h('p', { className: 'dsh-sct-note', key: 'live' }, t('dialog.live')),
+        h('div', { className: 'dsh-sct-actions', key: 'actions' },
+          h('button', {
+            type: 'button',
+            className: 'dsh-sct-button',
+            onClick: refresh,
+          }, t('dialog.refresh'))),
         h('p', { className: 'dsh-sct-note', key: 'peak' }, t('dialog.peakNote')),
         h('p', { className: 'dsh-sct-note', key: 'note' },
           t('dialog.note'), ' ',
@@ -842,10 +862,14 @@ window.__ModuleLoader__.load({
      * @returns the pill component.
      */
     function makeBalancePill(readBalance) {
-      return function BalancePill({ t }) {
+      return function BalancePill(props) {
+        const { t } = props
         const [state, setState] = React.useState({ status: 'loading' })
         const panel = usePillPanel()
         const alive = React.useRef(true)
+        const readSession = typeof props.useSession === 'function' ? props.useSession : () => undefined
+        const running = readSession(snapshot => snapshot && snapshot.running) === true
+        const wasRunning = React.useRef(false)
 
         const load = React.useCallback(async () => {
           try {
@@ -877,6 +901,12 @@ window.__ModuleLoader__.load({
         React.useEffect(() => {
           if (panel.open) load()
         }, [panel.open, load])
+
+        /* A finished turn means the wallet just changed; read it again. */
+        React.useEffect(() => {
+          if (wasRunning.current && !running) load()
+          wasRunning.current = running
+        }, [running, load])
 
         if (state.status === 'loading' || state.status === 'none' || state.status === 'unavailable') return null
 
@@ -954,6 +984,7 @@ window.__ModuleLoader__.load({
           bonus.map(entry => h('div', { className: 'dsh-sct-wallet', key: entry.currency },
             h('span', { className: 'dsh-sct-wallet-label' }, t('balance.bonus')),
             h('span', { className: 'dsh-sct-wallet-value' }, formatUsd(entry.balance, entry.currency))))),
+        h('p', { className: 'dsh-sct-note', key: 'auto' }, t('balance.auto')),
         h('p', { className: 'dsh-sct-note', key: 'time' },
           typeof at === 'number' && Number.isFinite(at)
             ? (stale ? t('balance.stale', { time: clock.format(new Date(at)) }) : t('balance.updated', { time: clock.format(new Date(at)) }))

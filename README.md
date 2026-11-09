@@ -9,13 +9,13 @@ Two small pills under the DSH composer:
 - **NT$ estimate** — what this conversation has cost so far, priced from the token usage DSH already reports.
 - **Balance** — the DeepSeek wallet behind the account you signed in to DSH with, converted to TWD. No browser tab needed.
 
-Both open a panel: the spend pill has a per-turn breakdown and pricing settings; the balance pill has top-up/bonus, the last read time, and a refresh button.
+Both open a panel: the spend pill has a per-turn breakdown, pricing settings, and **Refresh** (turn costs are already recomputed as tokens arrive — refresh re-reads the saved pricing); the balance pill has top-up/bonus, the last read time, and a refresh button.
 
 ## How it works
 
 - Spend = reported tokens × the official DeepSeek list price, converted to TWD. Cache-hit, cache-miss, and output tokens are priced separately, and each turn uses **its own** timestamp to pick peak or off-peak rates (peak is UTC Mon–Fri 01:00–04:00 and 06:00–10:00; Chinese public holidays are not tracked).
 - Balance is read by the plugin's Host half through DSH's own account service, the same one behind **Settings → Account**. The account token never leaves the Host; the browser only receives currency codes and amounts.
-- The balance is polled every 2 minutes, when the panel opens, and when the window becomes visible again.
+- The balance is read when the pill mounts, after every finished turn, every 2 minutes, when the panel opens, and when the window becomes visible again. The panel also has a **Refresh** button.
 
 ## Requirements
 
