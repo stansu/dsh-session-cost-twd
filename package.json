@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-cost-twd",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "DSH composer pills: estimated session spend in TWD and the DeepSeek wallet balance.",
   "type": "module",
   "exports": {

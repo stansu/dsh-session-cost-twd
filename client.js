@@ -36,6 +36,7 @@ window.__ModuleLoader__.load({
       'dialog.rate': 'USD → TWD',
       'dialog.rateNote': 'Used only for display; DeepSeek bills in US dollars.',
       'dialog.partial': 'Some turns did not report usage and are left out.',
+      'dialog.extrapolated': 'Turns outside the loaded window are included as an estimate at the current price band ({tokens} tokens).',
       'dialog.peakNote': 'Peak hours are 01:00–04:00 and 06:00–10:00 UTC, Monday to Friday; Chinese public holidays are not tracked.',
       'dialog.refresh': 'Refresh',
       'dialog.live': 'Turn costs are recomputed as tokens arrive; refresh re-reads the saved pricing.',
@@ -73,6 +74,7 @@ window.__ModuleLoader__.load({
       'dialog.rate': '美元 → 臺幣',
       'dialog.rateNote': '只用於換算顯示，DeepSeek 實際以美元扣款。',
       'dialog.partial': '有部分輪次沒有回報用量，未計入。',
+      'dialog.extrapolated': '未載入視窗的較早輪次，已依目前時段單價估算（{tokens} tokens）。',
       'dialog.peakNote': '尖峰時段為 UTC 週一至週五 01:00–04:00、06:00–10:00（即北京時間 09:00–12:00、14:00–18:00），未計入中國法定假日。',
       'dialog.refresh': '重新整理',
       'dialog.live': '每輪花費會隨 token 進帳即時重算；重新整理會重讀已存的計價設定。',
@@ -531,6 +533,24 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Price one set of disjoint billing buckets.
+     * @param counts - miss, hit, write, and out token counts.
+     * @param model - model id into MODELS.
+     * @param at - epoch milliseconds deciding the peak band.
+     * @returns USD amount.
+     */
+    function priceBuckets(counts, model, at) {
+      const price = MODELS[model] ?? MODELS[DEFAULTS.model]
+      const band = isPeak(at) ? 1 : 0
+      return (
+        counts.miss * price.miss[band]
+        + counts.write * price.miss[band]
+        + counts.hit * price.hit[band]
+        + counts.out * price.out[band]
+      ) / 1000000
+    }
+
+    /**
      * Price one usage record.
      * @param usage - reported token usage.
      * @param model - model id into MODELS.
@@ -538,17 +558,8 @@ window.__ModuleLoader__.load({
      * @returns USD amount, the band it used, and the bucket counts.
      */
     function priceUsage(usage, model, at) {
-      const price = MODELS[model] ?? MODELS[DEFAULTS.model]
-      const peak = isPeak(at)
-      const band = peak ? 1 : 0
       const counts = buckets(usage)
-      const amount = (
-        counts.miss * price.miss[band]
-        + counts.write * price.miss[band]
-        + counts.hit * price.hit[band]
-        + counts.out * price.out[band]
-      ) / 1000000
-      return { amount, peak, counts }
+      return { amount: priceBuckets(counts, model, at), peak: isPeak(at), counts }
     }
 
     /**
@@ -729,12 +740,39 @@ window.__ModuleLoader__.load({
         return { amount: result.amount, counts: result.counts, peak: result.peak }
       }, [priced.rows.length, projection, config.model, tick])
 
-      const totalUsd = priced.rows.length > 0
+      /* The projection covers the whole durable log, the timeline only its loaded window. */
+      const loaded = React.useMemo(() => {
+        const counts = { miss: 0, hit: 0, write: 0, out: 0, total: 0 }
+        for (const row of priced.rows) {
+          counts.miss += row.counts.miss
+          counts.hit += row.counts.hit
+          counts.write += row.counts.write
+          counts.out += row.counts.out
+          counts.total += row.counts.total
+        }
+        return counts
+      }, [priced.rows])
+
+      const extrapolated = React.useMemo(() => {
+        if (priced.rows.length === 0 || projection === undefined) return null
+        const whole = buckets(projection)
+        const rest = {
+          miss: Math.max(0, whole.miss - loaded.miss),
+          hit: Math.max(0, whole.hit - loaded.hit),
+          write: Math.max(0, whole.write - loaded.write),
+          out: Math.max(0, whole.out - loaded.out),
+        }
+        const total = rest.miss + rest.hit + rest.write + rest.out
+        if (total <= Math.max(100, loaded.total * 0.005)) return null
+        return { counts: rest, total, usd: priceBuckets(rest, config.model, Date.now()) }
+      }, [priced.rows.length, projection, loaded, config.model, tick])
+
+      const totalUsd = (priced.rows.length > 0
         ? priced.totalUsd
-        : fallback !== null ? fallback.amount : 0
-      const totalTokens = priced.rows.length > 0
+        : fallback !== null ? fallback.amount : 0) + (extrapolated === null ? 0 : extrapolated.usd)
+      const totalTokens = (priced.rows.length > 0
         ? priced.totalTokens
-        : fallback !== null ? fallback.counts.total : 0
+        : fallback !== null ? fallback.counts.total : 0) + (extrapolated === null ? 0 : extrapolated.total)
       const totalTwd = totalUsd * config.rate
       const amountText = formatTwd(totalTwd)
 
@@ -783,7 +821,19 @@ window.__ModuleLoader__.load({
           title: t('dialog.title'),
           subtitle: t('dialog.subtitle'),
           onClose: panel.close,
-        }, SpendDetails({ t, config, rows, totalUsd, totalTokens, totalTwd, turnCount: priced.rows.length, missing: priced.missing, update, refresh })) : null,
+        }, SpendDetails({
+          t,
+          config,
+          rows,
+          totalUsd,
+          totalTokens,
+          totalTwd,
+          turnCount: priced.rows.length,
+          missing: priced.missing,
+          unloaded: extrapolated === null ? 0 : extrapolated.total,
+          update,
+          refresh,
+        })) : null,
       )
     }
 
@@ -792,7 +842,7 @@ window.__ModuleLoader__.load({
      * @param props - totals, rows, and the pricing setter.
      * @returns the panel sections.
      */
-    function SpendDetails({ t, config, rows, totalUsd, totalTokens, totalTwd, turnCount, missing, update, refresh }) {
+    function SpendDetails({ t, config, rows, totalUsd, totalTokens, totalTwd, turnCount, missing, unloaded, update, refresh }) {
       const list = rows.map(row => h('li', {
         className: 'dsh-sct-row',
         key: String(row.turn),
@@ -838,6 +888,7 @@ window.__ModuleLoader__.load({
           })),
         h('p', { className: 'dsh-sct-note', key: 'rate' }, t('dialog.rateNote')),
         missing > 0 ? h('p', { className: 'dsh-sct-note', key: 'partial' }, t('dialog.partial')) : null,
+        unloaded > 0 ? h('p', { className: 'dsh-sct-note', key: 'unloaded' }, t('dialog.extrapolated', { tokens: formatTokens(unloaded) })) : null,
         h('p', { className: 'dsh-sct-note', key: 'live' }, t('dialog.live')),
         h('div', { className: 'dsh-sct-actions', key: 'actions' },
           h('button', {

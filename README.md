@@ -47,7 +47,8 @@ If your account is billed in **CNY**, the numbers are wrong by roughly the excha
 ## Notes
 
 - The estimate is not a bill. Actual deductions come from the wallet; the panel links to the platform billing page.
-- Only loaded turns are priced; older turns outside the window are left out and the panel says so.
+- The pill totals **this session from its first turn to now** — per turn, never across sessions.
+- Only loaded turns are priced in the breakdown. When DSH has not loaded the whole log, the difference is added as an estimate at the current price band and the panel says so.
 - Turning the plugin off or uninstalling it removes both pills and the route; nothing is written outside `localStorage`.
 
 ## License
